@@ -1,9 +1,15 @@
 ---
 title: "Rain Movies"
-author: "Matthew Ross"
-date: "11/7/2019"
+author: "Juli Scamardo"
+date: "11/19/2019"
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
+
+# Brief Note
+
+The final video is taking a very long time to run. Additionally, to generate the basemap for that final video requires a HUC8 shapefile for Colorado. This takes a long time (approximately 1hr) to download from the internet on my computer. I included a data folder with the .gdb that has those HUC8 files so you don't need to download them. 
 
 # Using R to make movies
 
@@ -22,6 +28,9 @@ library(lubridate)
 library(ggthemes)
 library(tmap)
 library(sf)
+library(nhdplusTools)
+library(nhdR)
+library(rgdal)
 theme_set(theme_few()) # Set ggplot theme
 
 
@@ -65,7 +74,7 @@ View(fc)
 
 ```{r}
 
-daily_p <- fc %>% 
+daily_pre <- fc %>% 
   bind_rows(af_p) %>%
   mutate(date = as.Date(valid)) %>%
   group_by(date, station, lon, lat) %>%
@@ -85,7 +94,7 @@ daily_p <- fc %>%
 
 ```{r}
 
-slice_p <- daily_p %>%
+slice_p <- daily_pre %>%
   slice(1:20)
 
 p1 <- ggplot(slice_p,aes(x=date,y=mean_temp,color=station,group=station)) + 
@@ -103,7 +112,7 @@ animate(p1, nframes=nrow(slice_p))
 ## Leaving a trace
 
 ```{r}
-p2 <- ggplot(daily_p,aes(x=date,y=mean_temp,color=station,group=station)) + 
+p2 <- ggplot(daily_pre,aes(x=date,y=mean_temp,color=station,group=station)) + 
   geom_line() + 
   geom_point() +
   labs(title = '100 mile temp diff', x='Date',y= 'Mean Temp (f)') + 
@@ -111,7 +120,7 @@ p2 <- ggplot(daily_p,aes(x=date,y=mean_temp,color=station,group=station)) +
   scale_color_few()
 
 
-animate(p2, nframes=nrow(daily_p))
+animate(p2, nframes=nrow(daily_pre))
 
 
 
@@ -127,7 +136,7 @@ usa <- us_states()
 co <- usa %>%
   filter(name == 'Colorado')
 
-sf_p <- daily_p %>%
+sf_p <- daily_pre %>%
   st_as_sf(coords=c('lon','lat'),crs=4326)
 
 
@@ -147,15 +156,14 @@ tm_shape(co) +
 ## Quick plot
 
 ```{r}
-
-
-  
 basemap <- tm_shape(co) + 
-    tm_polygons() + 
+  tm_polygons() + 
   tm_shape(co_elev) +
-    tm_raster(style='cont',
-              palette = 'Greens',
-              title='Elevation (m)') 
+  tm_raster(style='cont',
+            palette = 'Greens',
+            title='Elevation (m)') 
+
+##basemap
 ```
 
 
@@ -188,12 +196,14 @@ saveVideo({
                         title='Station'))
   }
 },movie.name = 'precip_flash.mp4',
+ffmpeg = 'C:/Program Files (x86)/ffmpeg/bin/ffmpeg.exe',
   interval=0.05,
   ani.width=1000,
   ani.height=800)
 
 
 ```
+
 
 # A cooler video
 
@@ -232,9 +242,6 @@ load('DailyP.RData')
 daily_sf <- daily_p %>%
   st_as_sf(.,coords=c('lon','lat'),crs=4326,remove=F)
 
-
-
-
 full_dates <- unique(daily_sf$date)
 
 sequence <- 1:length(full_dates)
@@ -262,6 +269,7 @@ saveVideo({
         legend.position=c(0.7,0.2)))
   }
 },movie.name = 'precip_flash_all.mp4',
+ffmpeg = 'C:/Program Files (x86)/ffmpeg/bin/ffmpeg.exe',
   interval=0.12,
   ani.width=1000,
   ani.height=800)
@@ -280,6 +288,30 @@ Make a video showing the correlation between Air Force Academy and Fort Collins
 between the min, mean, and max temps. The movie should cover the full year. 
 
 ```{r}
+## edit df to tidy temp data
+tidy_daily <- daily_pre %>%
+  gather(type, temp, mean_temp:max_temp)
+
+## breaks in date for graph
+dates <- as.Date(c("2018-11-01", '2019-04-01', '2019-09-01'), 
+                 format = '%Y-%m-%d')
+
+## create a ggplot of mean temp, max temp, and min temp
+p3 <- ggplot(tidy_daily, aes(x = date, y = temp, 
+                             color = station)) + 
+  geom_point()+
+  geom_line()+
+  facet_wrap(~type) +
+  labs(title = 'Temperature Differences: AFF and FNL',
+       x='Date',
+       y= 'Temp (of)') + 
+  scale_color_few() + 
+  scale_x_date(breaks = dates, date_labels = '%b-%y') + 
+  transition_reveal(date)
+
+
+## animate plot
+animate(p3, 150)
 
 ```
 
@@ -294,6 +326,69 @@ The video should look similar to the one above, but I want you to choose your ow
 style (change the background, add other layers (like counties or cities)), etc...
 
 ```{r}
+## download watershed boundaries
+# for downloading directly from internet (takes a long time)
+#db <- nhd_load(state = "CO", dsn = "WBDHU8")
+
+#for uploading from already downloaded file
+db <- './data/WBD_National_GDB.gdb'
+
+wbd <- st_read(db, layer = "WBDHU8")%>%
+  st_cast('MULTIPOLYGON')%>%
+  st_transform(crs(co_elev))
+
+co_wbd <- wbd %>%
+  select(SHAPE) %>%
+  st_crop(., st_bbox(co_elev))
+
+## create new basemap
+basemap2 <- tm_shape(co) + 
+  tm_polygons() +
+  tm_shape(co_elev) +
+  tm_raster(style='cont',
+            palette = 'YlOrRd',
+            contrast = c(0,0.5),
+            title='Elevation (m)') +
+  tm_shape(co_wbd) + 
+  tm_polygons(alpha = 0.2, border.col = 'black', 
+              border.alpha = 0.3)
+
+## basemap2
+
+## create video
 load('DailyP.RData')
+
+daily_sf <- daily_p %>%
+  st_as_sf(.,coords=c('lon','lat'),crs=4326,remove=F)
+
+full_dates <- unique(daily_sf$date)
+
+sequence <- 1:length(full_dates)
+saveVideo({
+  for(i in sequence){
+  sub_sf <- daily_sf %>%
+    filter(date == full_dates[i]) %>%
+    filter(daily_p > 0)
+  
+
+  if(nrow(sub_sf) > 0){
+  finalmap <- basemap2 + tm_shape(sub_sf) + 
+    tm_dots(title.size='Daily Temp (oF)',
+            col='mean_temp',
+            size=3,
+            style='cont',
+            palette='plasma',
+            legend.show = TRUE)
+  }else{finalmap <- basemap2}
+  print(finalmap + 
+          tm_layout(title=full_dates[i],
+        legend.position=c(0.7,0.2)))
+  }
+},movie.name = 'temp_flash_all.mp4',
+ffmpeg = 'C:/Program Files (x86)/ffmpeg/bin/ffmpeg.exe',
+  interval=0.12,
+  ani.width=1000,
+  ani.height=800)
+
 ```
 
